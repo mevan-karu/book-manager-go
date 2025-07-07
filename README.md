@@ -12,7 +12,7 @@ A simple REST API for managing books in a bookstore, built with Go.
 
 ## API Endpoints
 
-### POST /books
+### POST /api/books
 Add a new book to the bookstore.
 
 **Request Body:**
@@ -32,7 +32,7 @@ Add a new book to the bookstore.
 }
 ```
 
-### GET /books
+### GET /api/books
 Get all books from the bookstore.
 
 **Response:**
@@ -46,7 +46,7 @@ Get all books from the bookstore.
 ]
 ```
 
-### GET /books/{id}
+### GET /api/books/{id}
 Get a specific book by ID.
 
 **Response:**
@@ -76,19 +76,19 @@ Get a specific book by ID.
 
 ### Add a book:
 ```bash
-curl -X POST http://localhost:8080/books \
+curl -X POST http://localhost:8080/api/books \
   -H "Content-Type: application/json" \
   -d '{"name":"The Go Programming Language","author":"Alan Donovan"}'
 ```
 
 ### Get all books:
 ```bash
-curl http://localhost:8080/books
+curl http://localhost:8080/api/books
 ```
 
 ### Get a specific book:
 ```bash
-curl http://localhost:8080/books/1
+curl http://localhost:8080/api/books/1
 ```
 
 ## Project Structure
@@ -98,3 +98,21 @@ curl http://localhost:8080/books/1
 - `README.md` - This documentation file
 
 The application includes sample books for testing purposes when it starts.
+
+## Deploying to Choreo
+
+This project is configured to be deployed as a service component in Choreo. The following files support the Choreo deployment:
+
+- `.choreo/component.yaml` - Defines the service configuration for Choreo
+- `openapi.yaml` - OpenAPI specification for the REST API
+
+To deploy to Choreo:
+
+1. Ensure your code is pushed to a GitHub repository
+2. In Choreo, create a new service component 
+3. Select the GitHub repository and branch
+4. Choose Go as the buildpack
+5. Complete the deployment configuration
+6. Deploy the service
+
+After deployment, Choreo will provide you with endpoints to access your API through their managed gateway.
