@@ -1,11 +1,10 @@
 schemaVersion: 1.2
 endpoints:
-  - name: book-manager-go
-    displayName: Book Manager Go
+  - name: book-manager-api
+    displayName: Book Manager API
     service:
-      basePath: /books
+      basePath: /api
       port: 8080
-    type: REST
-    networkVisibilities:
-      - Public
-      - Organization
+      type: REST
+      networkVisibilities:
+        - Public
