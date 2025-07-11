@@ -5,71 +5,102 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
-	"sync"
 
 	"github.com/gorilla/mux"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 // Book represents a book in the bookstore
 type Book struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Author string `json:"author"`
+	ID     uint   `json:"id" gorm:"primaryKey"`
+	Name   string `json:"name" gorm:"not null"`
+	Author string `json:"author" gorm:"not null"`
 }
 
-// BookStore manages the collection of books
-type BookStore struct {
-	books  map[int]Book
-	nextID int
-	mutex  sync.RWMutex
-}
+// Database instance
+var db *gorm.DB
 
-// NewBookStore creates a new BookStore instance
-func NewBookStore() *BookStore {
-	return &BookStore{
-		books:  make(map[int]Book),
-		nextID: 1,
+// initDatabase initializes the database connection and creates tables
+func initDatabase() {
+	var err error
+
+	// Get database configuration from environment variables
+	host := getEnv("DB_HOST", "localhost")
+	port := getEnv("DB_PORT", "5432")
+	user := getEnv("DB_USER", "postgres")
+	password := getEnv("DB_PASSWORD", "")
+	dbname := getEnv("DB_NAME", "bookstore")
+	sslmode := getEnv("DB_SSLMODE", "disable")
+
+	// Construct connection string
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
+		host, user, password, dbname, port, sslmode)
+
+	// Open database connection
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatal("Failed to connect to database:", err)
 	}
+
+	// Auto-migrate the schema
+	err = db.AutoMigrate(&Book{})
+	if err != nil {
+		log.Fatal("Failed to migrate database:", err)
+	}
+
+	log.Println("Database connected and tables created successfully")
 }
 
-// AddBook adds a new book to the store
-func (bs *BookStore) AddBook(name, author string) Book {
-	bs.mutex.Lock()
-	defer bs.mutex.Unlock()
+// getEnv gets an environment variable with a fallback default value
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
 
+// BookService provides database operations for books
+type BookService struct{}
+
+// AddBook adds a new book to the database
+func (bs *BookService) AddBook(name, author string) (*Book, error) {
 	book := Book{
-		ID:     bs.nextID,
 		Name:   name,
 		Author: author,
 	}
-	bs.books[bs.nextID] = book
-	bs.nextID++
-	return book
-}
 
-// GetBooks returns all books in the store
-func (bs *BookStore) GetBooks() []Book {
-	bs.mutex.RLock()
-	defer bs.mutex.RUnlock()
-
-	books := make([]Book, 0, len(bs.books))
-	for _, book := range bs.books {
-		books = append(books, book)
+	result := db.Create(&book)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	return books
+
+	return &book, nil
 }
 
-// GetBookByID returns a book by its ID
-func (bs *BookStore) GetBookByID(id int) (Book, bool) {
-	bs.mutex.RLock()
-	defer bs.mutex.RUnlock()
-
-	book, exists := bs.books[id]
-	return book, exists
+// GetBooks returns all books from the database
+func (bs *BookService) GetBooks() ([]Book, error) {
+	var books []Book
+	result := db.Find(&books)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return books, nil
 }
 
-var bookStore = NewBookStore()
+// GetBookByID returns a book by its ID from the database
+func (bs *BookService) GetBookByID(id uint) (*Book, error) {
+	var book Book
+	result := db.First(&book, id)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &book, nil
+}
+
+var bookService = &BookService{}
 
 // createBookHandler handles POST /books
 func createBookHandler(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +119,11 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book := bookStore.AddBook(req.Name, req.Author)
+	book, err := bookService.AddBook(req.Name, req.Author)
+	if err != nil {
+		http.Error(w, "Failed to create book: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -97,7 +132,11 @@ func createBookHandler(w http.ResponseWriter, r *http.Request) {
 
 // getBooksHandler handles GET /books
 func getBooksHandler(w http.ResponseWriter, r *http.Request) {
-	books := bookStore.GetBooks()
+	books, err := bookService.GetBooks()
+	if err != nil {
+		http.Error(w, "Failed to get books: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(books)
@@ -114,9 +153,13 @@ func getBookByIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book, exists := bookStore.GetBookByID(id)
-	if !exists {
-		http.Error(w, "Book not found", http.StatusNotFound)
+	book, err := bookService.GetBookByID(uint(id))
+	if err != nil {
+		if err.Error() == "record not found" {
+			http.Error(w, "Book not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to get book: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -125,24 +168,43 @@ func getBookByIDHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Initialize database
+	initDatabase()
+
 	r := mux.NewRouter()
+	apiRouter := r.PathPrefix("/api").Subrouter()
 
 	// API routes
-	r.HandleFunc("/books", createBookHandler).Methods("POST")
-	r.HandleFunc("/books", getBooksHandler).Methods("GET")
-	r.HandleFunc("/books/{id}", getBookByIDHandler).Methods("GET")
+	apiRouter.HandleFunc("/books", createBookHandler).Methods("POST")
+	apiRouter.HandleFunc("/books", getBooksHandler).Methods("GET")
+	apiRouter.HandleFunc("/books/{id}", getBookByIDHandler).Methods("GET")
 
-	// Add some sample books for testing
-	bookStore.AddBook("The Go Programming Language", "Alan Donovan")
-	bookStore.AddBook("Clean Code", "Robert Martin")
-	bookStore.AddBook("The Pragmatic Programmer", "David Thomas")
+	// Add some sample books for testing (only if database is empty)
+	var count int64
+	db.Model(&Book{}).Count(&count)
+	if count == 0 {
+		sampleBooks := []Book{
+			{Name: "The Go Programming Language", Author: "Alan Donovan"},
+			{Name: "Clean Code", Author: "Robert Martin"},
+			{Name: "The Pragmatic Programmer", Author: "David Thomas"},
+		}
+		for _, book := range sampleBooks {
+			bookService.AddBook(book.Name, book.Author)
+		}
+		log.Println("Sample books added to database")
+	}
 
-	port := ":8080"
+	port := getEnv("PORT", "8080")
+	if port[0] != ':' {
+		port = ":" + port
+	}
+
 	fmt.Printf("Server starting on port %s\n", port)
 	fmt.Println("Available endpoints:")
-	fmt.Println("  POST /books - Add a new book")
-	fmt.Println("  GET /books - Get all books")
-	fmt.Println("  GET /books/{id} - Get book by ID")
+	fmt.Println("  POST /api/books - Add a new book")
+	fmt.Println("  GET /api/books - Get all books")
+	fmt.Println("  GET /api/books/{id} - Get book by ID")
+	fmt.Printf("Database connected to: %s\n", getEnv("DB_HOST", "localhost"))
 
 	log.Fatal(http.ListenAndServe(port, r))
 }
